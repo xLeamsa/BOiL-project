@@ -89,7 +89,7 @@ export function computeLayout(results: CpmResult[], tasks: Task[]): GraphLayout 
     const maxLevel = Math.max(...[...levelMap.values()]);
     const maxNodesAtLevel = Math.max(...[...levelGroups.values()].map(g => g.length));
 
-    const totalWidth = (maxLevel + 1) * (NODE_WIDTH + LEVEL_GAP) + 2 * PADDING;
+    const totalWidth = (maxLevel + 1) * (NODE_WIDTH + LEVEL_GAP) - LEVEL_GAP + 2 * PADDING;
     const totalHeight = maxNodesAtLevel * (NODE_HEIGHT + NODE_GAP) - NODE_GAP + 2 * PADDING;
 
     // Compute x, y for each node

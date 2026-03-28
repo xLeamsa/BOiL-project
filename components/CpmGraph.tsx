@@ -1,5 +1,5 @@
-import React from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import React, { memo, useState } from 'react';
+import { Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { showAlert } from '../utils/alert';
 import Svg, { Line, Polygon, Rect, Text as SvgText } from 'react-native-svg';
 import type { CpmResult } from '../utils/cpm';
@@ -11,143 +11,186 @@ interface Props {
     results: CpmResult[];
 }
 
+type TooltipInfo = { title: string; description: string; value: string | number };
+
 const COL_SIDE = 40;
 const COL_MID = NODE_WIDTH - COL_SIDE * 2;  // 80px
 const ROW_H = NODE_HEIGHT / 2;              // 30px
+const GRAPH_HEIGHT = 350;                   // fixed scroll height on web
 
-const CRITICAL_FILL = '#ffe8e8';
-const CRITICAL_STROKE = '#e63946';
-const CRITICAL_TEXT = '#c1121f';
-const NORMAL_FILL = '#fefae0';
-const NORMAL_STROKE = '#283618';
-const NORMAL_TEXT = '#283618';
+const CRITICAL_FILL       = '#ffe8e8';
+const CRITICAL_FILL_HOVER = '#ffc5c5';
+const CRITICAL_STROKE     = '#e63946';
+const CRITICAL_TEXT       = '#c1121f';
+const NORMAL_FILL         = '#fefae0';
+const NORMAL_FILL_HOVER   = '#ede8c2';
+const NORMAL_STROKE       = '#283618';
+const NORMAL_TEXT         = '#283618';
 
 const EDGE_CRITICAL = '#e63946';
-const EDGE_NORMAL = '#555555';
+const EDGE_NORMAL   = '#555555';
 
-// Descriptions shown in Alert when user taps a cell
+const FONT_FAMILY = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : undefined;
+
 const CELL_INFO: Record<string, { title: string; description: string }> = {
-    es: {
-        title: 'ES — Najwcześniejszy Start',
-        description: 'Najwcześniejszy możliwy termin rozpoczęcia tej czynności.\n\nES = max(EF wszystkich poprzedników)\nDla pierwszej czynności: ES = 0',
-    },
-    name: {
-        title: 'Nazwa czynności',
-        description: 'Identyfikator czynności w sieci CPM.\n\nCzynności krytyczne (Luz = 0) wyróżnione są czerwoną ramką — tworzą krytyczną ścieżkę projektu.',
-    },
-    ef: {
-        title: 'EF — Najwcześniejszy Koniec',
-        description: 'Najwcześniejszy możliwy termin zakończenia tej czynności.\n\nEF = ES + czas trwania',
-    },
-    ls: {
-        title: 'LS — Najpóźniejszy Start',
-        description: 'Najpóźniejszy dopuszczalny termin rozpoczęcia czynności bez opóźnienia całego projektu.\n\nLS = LF − czas trwania',
-    },
-    luz: {
-        title: 'Luz — Rezerwa Czasowa',
-        description: 'Czas, o który można opóźnić czynność bez wpływu na termin zakończenia projektu.\n\nLuz = LS − ES\n\nLuz = 0 → czynność krytyczna\nLuz > 0 → czynność niekrytyczna',
-    },
-    lf: {
-        title: 'LF — Najpóźniejszy Koniec',
-        description: 'Najpóźniejszy dopuszczalny termin zakończenia czynności bez opóźnienia projektu.\n\nLF = min(LS wszystkich następników)\nDla ostatniej czynności: LF = czas trwania projektu',
-    },
+    es:   { title: 'ES — Najwcześniejszy Start',   description: 'Najwcześniejszy możliwy termin rozpoczęcia tej czynności.\n\nES = max(EF wszystkich poprzedników)\nDla pierwszej czynności: ES = 0' },
+    name: { title: 'Nazwa czynności',               description: 'Identyfikator czynności w sieci CPM.\n\nCzynności krytyczne (Luz = 0) wyróżnione są czerwoną ramką — tworzą krytyczną ścieżkę projektu.' },
+    ef:   { title: 'EF — Najwcześniejszy Koniec',   description: 'Najwcześniejszy możliwy termin zakończenia tej czynności.\n\nEF = ES + czas trwania' },
+    ls:   { title: 'LS — Najpóźniejszy Start',      description: 'Najpóźniejszy dopuszczalny termin rozpoczęcia czynności bez opóźnienia całego projektu.\n\nLS = LF − czas trwania' },
+    luz:  { title: 'Luz — Rezerwa Czasowa',         description: 'Czas, o który można opóźnić czynność bez wpływu na termin zakończenia projektu.\n\nLuz = LS − ES\n\nLuz = 0 → czynność krytyczna\nLuz > 0 → czynność niekrytyczna' },
+    lf:   { title: 'LF — Najpóźniejszy Koniec',     description: 'Najpóźniejszy dopuszczalny termin zakończenia czynności bez opóźnienia projektu.\n\nLF = min(LS wszystkich następników)\nDla ostatniej czynności: LF = czas trwania projektu' },
 };
 
-function NodeBox({
+// Inset so highlight rect never overlaps the 2px border/divider stroke
+const INSET = 1;
+
+const NodeBox = memo(function NodeBox({
     node,
     result,
+    onCellHover,
 }: {
     node: NodeLayout;
     result: CpmResult;
+    onCellHover?: (info: TooltipInfo | null) => void;
 }) {
+    const [hoveredCell, setHoveredCell] = useState<string | null>(null);
     const { x, y } = node;
     const critical = result.critical;
 
-    const fill = critical ? CRITICAL_FILL : NORMAL_FILL;
-    const stroke = critical ? CRITICAL_STROKE : NORMAL_STROKE;
-    const textColor = critical ? CRITICAL_TEXT : NORMAL_TEXT;
+    const baseFill  = critical ? CRITICAL_FILL       : NORMAL_FILL;
+    const hoverFill = critical ? CRITICAL_FILL_HOVER : NORMAL_FILL_HOVER;
+    const stroke    = critical ? CRITICAL_STROKE     : NORMAL_STROKE;
+    const textColor = critical ? CRITICAL_TEXT       : NORMAL_TEXT;
 
     const col0cx = x + COL_SIDE / 2;
     const col1cx = x + COL_SIDE + COL_MID / 2;
     const col2cx = x + COL_SIDE + COL_MID + COL_SIDE / 2;
-
-    // +4 offset approximates vertical centering (baseline shift for ~11-12px font)
     const row0cy = y + ROW_H / 2 + 4;
     const row1cy = y + ROW_H + ROW_H / 2 + 4;
+    const div1x  = x + COL_SIDE;
+    const div2x  = x + COL_SIDE + COL_MID;
 
-    const div1x = x + COL_SIDE;
-    const div2x = x + COL_SIDE + COL_MID;
-
-    const pressCell = (key: keyof typeof CELL_INFO) => {
-        const info = CELL_INFO[key];
-        showAlert(info.title, info.description);
+    const getCellValue = (key: string): string | number => {
+        switch (key) {
+            case 'es':   return result.es;
+            case 'ef':   return result.ef;
+            case 'ls':   return result.ls;
+            case 'lf':   return result.lf;
+            case 'luz':  return result.float;
+            case 'name': return result.name;
+            default:     return '';
+        }
     };
+
+    const pressCell = (key: string) => {
+        const info = CELL_INFO[key];
+        showAlert(`${info.title}: ${getCellValue(key)}`, info.description);
+    };
+
+    const hoverIn = (key: string) => {
+        setHoveredCell(key);
+        onCellHover?.({ ...CELL_INFO[key], value: getCellValue(key) });
+    };
+
+    const hoverOut = () => {
+        setHoveredCell(null);
+        onCellHover?.(null);
+    };
+
+    // Transparent event-only rect — no fill so it never covers anything
+    const eventRect = (cx: number, cy: number, w: number, h: number, key: string) => {
+        const webProps = Platform.OS === 'web'
+            ? { onMouseEnter: () => hoverIn(key), onMouseLeave: hoverOut }
+            : {};
+        return (
+            <Rect
+                key={`ev-${key}`}
+                x={cx} y={cy} width={w} height={h}
+                fill="transparent"
+                onPress={() => pressCell(key)}
+                {...(webProps as any)}
+            />
+        );
+    };
+
+    // Highlight rect — inset by 1px so it stays strictly inside border/divider strokes
+    const highlightRect = (cx: number, cy: number, w: number, h: number, key: string) => (
+        <Rect
+            key={`hl-${key}`}
+            x={cx + INSET} y={cy + INSET}
+            width={w - INSET * 2} height={h - INSET * 2}
+            fill={hoveredCell === key ? hoverFill : 'none'}
+        />
+    );
 
     return (
         <>
-            {/* Background */}
-            <Rect x={x} y={y} width={NODE_WIDTH} height={NODE_HEIGHT} fill={fill} stroke={stroke} strokeWidth={2} rx={3} />
+            {/* 1 — background + border */}
+            <Rect x={x} y={y} width={NODE_WIDTH} height={NODE_HEIGHT}
+                fill={baseFill} stroke={stroke} strokeWidth={2} rx={3} />
 
-            {/* Horizontal divider */}
-            <Line x1={x} y1={y + ROW_H} x2={x + NODE_WIDTH} y2={y + ROW_H} stroke={stroke} strokeWidth={1} />
+            {/* 2 — cell highlights (inset, painted BEFORE lines & text so they stay below) */}
+            {highlightRect(x,     y,         COL_SIDE, ROW_H, 'es')}
+            {highlightRect(div1x, y,         COL_MID,  ROW_H, 'name')}
+            {highlightRect(div2x, y,         COL_SIDE, ROW_H, 'ef')}
+            {highlightRect(x,     y + ROW_H, COL_SIDE, ROW_H, 'ls')}
+            {highlightRect(div1x, y + ROW_H, COL_MID,  ROW_H, 'luz')}
+            {highlightRect(div2x, y + ROW_H, COL_SIDE, ROW_H, 'lf')}
 
-            {/* Vertical dividers */}
-            <Line x1={div1x} y1={y} x2={div1x} y2={y + NODE_HEIGHT} stroke={stroke} strokeWidth={1} />
-            <Line x1={div2x} y1={y} x2={div2x} y2={y + NODE_HEIGHT} stroke={stroke} strokeWidth={1} />
+            {/* 3 — divider lines (on top of highlights) */}
+            <Line x1={x}    y1={y + ROW_H} x2={x + NODE_WIDTH} y2={y + ROW_H} stroke={stroke} strokeWidth={2} />
+            <Line x1={div1x} y1={y} x2={div1x} y2={y + NODE_HEIGHT} stroke={stroke} strokeWidth={2} />
+            <Line x1={div2x} y1={y} x2={div2x} y2={y + NODE_HEIGHT} stroke={stroke} strokeWidth={2} />
 
-            {/* Row 0: ES | NAME | EF */}
-            <SvgText x={col0cx} y={row0cy} textAnchor="middle" fontSize={11} fontWeight="bold" fill={textColor}>{result.es}</SvgText>
-            <SvgText x={col1cx} y={row0cy} textAnchor="middle" fontSize={12} fontWeight="bold" fill={textColor}>{result.name}</SvgText>
-            <SvgText x={col2cx} y={row0cy} textAnchor="middle" fontSize={11} fontWeight="bold" fill={textColor}>{result.ef}</SvgText>
+            {/* 4 — text (on top of highlights and lines) */}
+            <SvgText x={col0cx} y={row0cy} textAnchor="middle" fontSize={11} fontWeight="bold" fontFamily={FONT_FAMILY} fill={textColor}>{result.es}</SvgText>
+            <SvgText x={col1cx} y={row0cy} textAnchor="middle" fontSize={12} fontWeight="bold" fontFamily={FONT_FAMILY} fill={textColor}>{result.name}</SvgText>
+            <SvgText x={col2cx} y={row0cy} textAnchor="middle" fontSize={11} fontWeight="bold" fontFamily={FONT_FAMILY} fill={textColor}>{result.ef}</SvgText>
+            <SvgText x={col0cx} y={row1cy} textAnchor="middle" fontSize={11} fontWeight="bold" fontFamily={FONT_FAMILY} fill={textColor}>{result.ls}</SvgText>
+            <SvgText x={col1cx} y={row1cy} textAnchor="middle" fontSize={10} fontWeight="bold" fontFamily={FONT_FAMILY} fill={textColor}>luz: {result.float}</SvgText>
+            <SvgText x={col2cx} y={row1cy} textAnchor="middle" fontSize={11} fontWeight="bold" fontFamily={FONT_FAMILY} fill={textColor}>{result.lf}</SvgText>
 
-            {/* Row 1: LS | FLOAT | LF */}
-            <SvgText x={col0cx} y={row1cy} textAnchor="middle" fontSize={11} fontWeight="bold" fill={textColor}>{result.ls}</SvgText>
-            <SvgText x={col1cx} y={row1cy} textAnchor="middle" fontSize={10} fontWeight="bold" fill={textColor}>luz: {result.float}</SvgText>
-            <SvgText x={col2cx} y={row1cy} textAnchor="middle" fontSize={11} fontWeight="bold" fill={textColor}>{result.lf}</SvgText>
-
-            {/* Transparent pressable hit areas on top */}
-            <Rect x={x} y={y} width={COL_SIDE} height={ROW_H} fill="transparent" onPress={() => pressCell('es')} />
-            <Rect x={div1x} y={y} width={COL_MID} height={ROW_H} fill="transparent" onPress={() => pressCell('name')} />
-            <Rect x={div2x} y={y} width={COL_SIDE} height={ROW_H} fill="transparent" onPress={() => pressCell('ef')} />
-            <Rect x={x} y={y + ROW_H} width={COL_SIDE} height={ROW_H} fill="transparent" onPress={() => pressCell('ls')} />
-            <Rect x={div1x} y={y + ROW_H} width={COL_MID} height={ROW_H} fill="transparent" onPress={() => pressCell('luz')} />
-            <Rect x={div2x} y={y + ROW_H} width={COL_SIDE} height={ROW_H} fill="transparent" onPress={() => pressCell('lf')} />
+            {/* 5 — transparent event rects (topmost, capture hover/click) */}
+            {eventRect(x,     y,         COL_SIDE, ROW_H, 'es')}
+            {eventRect(div1x, y,         COL_MID,  ROW_H, 'name')}
+            {eventRect(div2x, y,         COL_SIDE, ROW_H, 'ef')}
+            {eventRect(x,     y + ROW_H, COL_SIDE, ROW_H, 'ls')}
+            {eventRect(div1x, y + ROW_H, COL_MID,  ROW_H, 'luz')}
+            {eventRect(div2x, y + ROW_H, COL_SIDE, ROW_H, 'lf')}
         </>
     );
-}
+});
 
 function Arrow({ edge }: { edge: EdgeLayout }) {
     const color = edge.critical ? EDGE_CRITICAL : EDGE_NORMAL;
-    const sw = edge.critical ? 2.5 : 1.5;
-
+    const sw    = edge.critical ? 3 : 2;
     const ax = edge.x2;
     const ay = edge.y2;
-    const arrowPoints = `${ax},${ay} ${ax - 10},${ay - 5} ${ax - 10},${ay + 5}`;
-
     return (
         <>
-            <Line
-                x1={edge.x1}
-                y1={edge.y1}
-                x2={edge.x2 - 9}
-                y2={edge.y2}
-                stroke={color}
-                strokeWidth={sw}
-            />
-            <Polygon points={arrowPoints} fill={color} />
+            <Line x1={edge.x1} y1={edge.y1} x2={ax - 9} y2={ay} stroke={color} strokeWidth={sw} />
+            <Polygon points={`${ax},${ay} ${ax - 10},${ay - 5} ${ax - 10},${ay + 5}`} fill={color} />
         </>
     );
 }
 
 export default function CpmGraph({ layout, results }: Props) {
+    const { width: screenWidth } = useWindowDimensions();
+    const [tooltip, setTooltip] = useState<TooltipInfo | null>(null);
+
     const resultByName = new Map<string, CpmResult>();
     for (const r of results) resultByName.set(r.name, r);
 
+    const graphWidth = Math.min(layout.totalWidth, screenWidth - 40);
+
     return (
-        <View style={styles.wrapper}>
+        // overflow: 'visible' lets the absolutely-positioned tooltip escape the wrapper
+        // without affecting document layout (no page shift)
+        <View style={[styles.wrapper, { width: graphWidth }]}>
             <ScrollView
                 horizontal
-                style={styles.outerScroll}
+                // Fixed height on web so tooltip top offset is predictable
+                style={[styles.outerScroll, Platform.OS === 'web' && { height: GRAPH_HEIGHT }]}
                 contentContainerStyle={{ width: Math.max(layout.totalWidth, 1) }}
                 showsHorizontalScrollIndicator
             >
@@ -157,30 +200,77 @@ export default function CpmGraph({ layout, results }: Props) {
                     showsVerticalScrollIndicator
                 >
                     <Svg width={layout.totalWidth} height={layout.totalHeight}>
-                        {layout.edges.map((edge, i) => (
-                            <Arrow key={i} edge={edge} />
-                        ))}
+                        {layout.edges.map((edge, i) => <Arrow key={i} edge={edge} />)}
                         {layout.nodes.map(node => {
                             const result = resultByName.get(node.taskName);
                             if (!result) return null;
-                            return <NodeBox key={node.taskName} node={node} result={result} />;
+                            return (
+                                <NodeBox
+                                    key={node.taskName}
+                                    node={node}
+                                    result={result}
+                                    onCellHover={Platform.OS === 'web' ? setTooltip : undefined}
+                                />
+                            );
                         })}
                     </Svg>
                 </ScrollView>
             </ScrollView>
+
+            {/* Absolutely positioned — floats below graph, never pushes page content */}
+            {tooltip && Platform.OS === 'web' && (
+                <View style={styles.tooltip}>
+                    <View style={styles.tooltipHeader}>
+                        <Text style={styles.tooltipTitle}>{tooltip.title}</Text>
+                        <Text style={styles.tooltipValue}>{tooltip.value}</Text>
+                    </View>
+                    <Text style={styles.tooltipDesc}>{tooltip.description}</Text>
+                </View>
+            )}
         </View>
     );
 }
 
 const styles = StyleSheet.create({
     wrapper: {
-        borderRadius: 6,
-        overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: '#ccc',
         backgroundColor: 'transparent',
+        overflow: 'visible',
+        width: '100%',
     },
     outerScroll: {
-        maxHeight: 350,
+        maxHeight: GRAPH_HEIGHT,
+    },
+    tooltip: {
+        position: 'absolute',
+        top: GRAPH_HEIGHT - 200,
+        left: 0,
+        right: 0,
+        zIndex: 9999,
+        backgroundColor: '#283618',
+        padding: 10,
+        borderRadius: 6,
+    },
+    tooltipHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 4,
+    },
+    tooltipTitle: {
+        color: '#fff',
+        fontWeight: 'bold',
+        fontSize: 13,
+        flexShrink: 1,
+    },
+    tooltipValue: {
+        color: '#ffd166',
+        fontWeight: 'bold',
+        fontSize: 15,
+        marginLeft: 10,
+    },
+    tooltipDesc: {
+        color: '#dde',
+        fontSize: 12,
+        lineHeight: 18,
     },
 });

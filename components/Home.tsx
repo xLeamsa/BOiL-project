@@ -204,7 +204,9 @@ export default function Home() {
             {cpmResults && graphLayout && (
                 <>
                     <Text style={styles.sectionTitle}>Diagram CPM</Text>
-                    <CpmGraph layout={graphLayout} results={cpmResults} />
+                    <View style={{ alignItems: 'center' }}>
+                        <CpmGraph layout={graphLayout} results={cpmResults} />
+                    </View>
 
                     <Text style={styles.sectionTitle}>Wyniki CPM</Text>
                     <CpmResultTable results={cpmResults} />
