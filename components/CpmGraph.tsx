@@ -1,4 +1,5 @@
-import React, { memo, useState } from 'react';
+import React, { memo, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { showAlert } from '../utils/alert';
 import Svg, { Line, Polygon, Rect, Text as SvgText } from 'react-native-svg';
@@ -11,12 +12,12 @@ interface Props {
     results: CpmResult[];
 }
 
-type TooltipInfo = { title: string; description: string; value: string | number };
+type TooltipInfo = { title: string; description: string; value: string | number; mouseX: number; mouseY: number };
 
 const COL_SIDE = 40;
-const COL_MID = NODE_WIDTH - COL_SIDE * 2;  // 80px
-const ROW_H = NODE_HEIGHT / 2;              // 30px
-const GRAPH_HEIGHT = 350;                   // fixed scroll height on web
+const COL_MID = NODE_WIDTH - COL_SIDE * 2; 
+const ROW_H = NODE_HEIGHT / 2;            
+const GRAPH_HEIGHT = 350;                  
 
 const CRITICAL_FILL       = '#ffe8e8';
 const CRITICAL_FILL_HOVER = '#ffc5c5';
@@ -87,9 +88,12 @@ const NodeBox = memo(function NodeBox({
         showAlert(`${info.title}: ${getCellValue(key)}`, info.description);
     };
 
-    const hoverIn = (key: string) => {
+    const hoverIn = (key: string, e?: any) => {
         setHoveredCell(key);
-        onCellHover?.({ ...CELL_INFO[key], value: getCellValue(key) });
+        console.log('hoverIn', { key, event: e });
+        const mouseX = e?.nativeEvent?.clientX ?? 0;
+        const mouseY = e?.nativeEvent?.clientY ?? 0;
+        onCellHover?.({ ...CELL_INFO[key], value: getCellValue(key), mouseX, mouseY });
     };
 
     const hoverOut = () => {
@@ -100,7 +104,7 @@ const NodeBox = memo(function NodeBox({
     // Transparent event-only rect — no fill so it never covers anything
     const eventRect = (cx: number, cy: number, w: number, h: number, key: string) => {
         const webProps = Platform.OS === 'web'
-            ? { onMouseEnter: () => hoverIn(key), onMouseLeave: hoverOut }
+            ? { onMouseEnter: (e: any) => hoverIn(key, e), onMouseLeave: hoverOut }
             : {};
         return (
             <Rect
@@ -178,26 +182,35 @@ export default function CpmGraph({ layout, results }: Props) {
     const { width: screenWidth } = useWindowDimensions();
     const [tooltip, setTooltip] = useState<TooltipInfo | null>(null);
 
+    useEffect(() => {
+        if (Platform.OS !== 'web') return;
+        const hide = () => setTooltip(null);
+        window.addEventListener('scroll', hide, true);
+        return () => window.removeEventListener('scroll', hide, true);
+    }, []);
+
     const resultByName = new Map<string, CpmResult>();
     for (const r of results) resultByName.set(r.name, r);
 
     const graphWidth = Math.min(layout.totalWidth, screenWidth - 40);
 
     return (
-        // overflow: 'visible' lets the absolutely-positioned tooltip escape the wrapper
-        // without affecting document layout (no page shift)
+        <>
         <View style={[styles.wrapper, { width: graphWidth }]}>
             <ScrollView
                 horizontal
-                // Fixed height on web so tooltip top offset is predictable
                 style={[styles.outerScroll, Platform.OS === 'web' && { height: GRAPH_HEIGHT }]}
                 contentContainerStyle={{ width: Math.max(layout.totalWidth, 1) }}
                 showsHorizontalScrollIndicator
+                onScroll={() => setTooltip(null)}
+                scrollEventThrottle={16}
             >
                 <ScrollView
                     style={{ width: layout.totalWidth }}
                     contentContainerStyle={{ height: layout.totalHeight }}
                     showsVerticalScrollIndicator
+                    onScroll={() => setTooltip(null)}
+                    scrollEventThrottle={16}
                 >
                     <Svg width={layout.totalWidth} height={layout.totalHeight}>
                         {layout.edges.map((edge, i) => <Arrow key={i} edge={edge} />)}
@@ -217,17 +230,18 @@ export default function CpmGraph({ layout, results }: Props) {
                 </ScrollView>
             </ScrollView>
 
-            {/* Absolutely positioned — floats below graph, never pushes page content */}
-            {tooltip && Platform.OS === 'web' && (
-                <View style={styles.tooltip}>
-                    <View style={styles.tooltipHeader}>
-                        <Text style={styles.tooltipTitle}>{tooltip.title}</Text>
-                        <Text style={styles.tooltipValue}>{tooltip.value}</Text>
-                    </View>
-                    <Text style={styles.tooltipDesc}>{tooltip.description}</Text>
-                </View>
-            )}
         </View>
+        {tooltip && Platform.OS === 'web' && createPortal(
+            <View style={[styles.tooltip, { left: tooltip.mouseX - 160, top: tooltip.mouseY + 30 } as any]}>
+                <View style={styles.tooltipHeader}>
+                    <Text style={styles.tooltipTitle}>{tooltip.title}</Text>
+                    <Text style={styles.tooltipValue}>{tooltip.value}</Text>
+                </View>
+                <Text style={styles.tooltipDesc}>{tooltip.description}</Text>
+            </View>,
+            document.body
+        )}
+            </>
     );
 }
 
@@ -241,14 +255,13 @@ const styles = StyleSheet.create({
         maxHeight: GRAPH_HEIGHT,
     },
     tooltip: {
-        position: 'absolute',
-        top: GRAPH_HEIGHT - 200,
-        left: 0,
-        right: 0,
+        position: 'fixed',
         zIndex: 9999,
         backgroundColor: '#283618',
         padding: 10,
         borderRadius: 6,
+        maxWidth: 320,
+        minWidth: 200,
     },
     tooltipHeader: {
         flexDirection: 'row',
